@@ -3,49 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <style>
-  html, body {
-    margin: 0;
-    background: transparent;
-    color: #e6edf3;
-    font-family: sans-serif;
-    width: 100%;
-    height: 100%;
-  }
-  #minimizedBtn {
-    position: fixed;
-    top: 10px; left: 10px;
-    width: 48px; height: 48px;
-    border-radius: 50%;
-    background: #3a7bd5;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-  }
-  #minimizedBtn.hidden { display: none; }
-
-  #app {
-    background: #0d1117;
-    padding: 14px;
-    height: 100%;
-    box-sizing: border-box;
-    overflow-y: auto;
-  }
+  html, body { margin: 0; background: #0d1117; color: #e6edf3; font-family: sans-serif; width: 100%; height: 100%; overflow: hidden; }
+  #app { padding: 14px; height: 100%; box-sizing: border-box; overflow-y: auto; }
   #app.hidden { display: none; }
-
+  #minimizedView {
+    display: none; height: 100%; align-items: center; justify-content: center; cursor: pointer; font-size: 24px;
+  }
+  #minimizedView.visible { display: flex; }
   #appHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   #appHeader h2 { color: #58a6ff; font-size: 16px; margin: 0; }
   #minimizeBtn { background: #30363d; color: #e6edf3; border: none; border-radius: 5px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
-
   .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 14px; }
   .panelHeader { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; cursor: pointer; user-select: none; }
   .panelHeader h3 { margin: 0; font-size: 13px; color: #58a6ff; text-transform: uppercase; }
   .panelHeader .toggle { font-size: 14px; color: #8b949e; }
   .panelBody { padding: 0 12px 12px 12px; }
   .panelBody.collapsed { display: none; }
-
   .contact { background: #0d1117; border: 1px solid #ffb020; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
   .contact .label { color: #ffb020; font-weight: bold; margin-bottom: 6px; font-size: 13px; font-family: monospace; }
   .tokenOption { background: #21262d; padding: 8px 10px; border-radius: 5px; margin-bottom: 4px; cursor: pointer; font-size: 13px; }
@@ -54,7 +27,7 @@
 </style>
 </head>
 <body>
-<div id="minimizedBtn" class="hidden">🎮</div>
+<div id="minimizedView">🎮</div>
 <div id="app">
   <div id="appHeader">
     <h2>🎮 Steuerungs-Gerät</h2>
@@ -71,6 +44,6 @@
     </div>
   </div>
 </div>
-<script type="module" src="control.js"></script>
+<script type="module" src="control.js?v=6"></script>
 </body>
 </html>
