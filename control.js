@@ -6,11 +6,14 @@ const panelHeader = document.getElementById("panelHeader");
 const panelBody = document.getElementById("panelBody");
 const toggleIcon = document.getElementById("toggleIcon");
 const app = document.getElementById("app");
-const minimizedBtn = document.getElementById("minimizedBtn");
+const minimizedView = document.getElementById("minimizedView");
 const minimizeBtn = document.getElementById("minimizeBtn");
 
 const META_KEY_CONTACTS = "com.minitracker/contacts";
 const META_KEY_LINKS = "com.minitracker/links";
+const POPOVER_ID = "com.minitracker.control";
+const EXPANDED_SIZE = { width: 420, height: 640 };
+const MINIMIZED_SIZE = { width: 60, height: 60 };
 
 let sceneTokens = [];
 let currentContacts = {};
@@ -20,13 +23,20 @@ panelHeader.addEventListener("click", () => {
   toggleIcon.textContent = panelBody.classList.contains("collapsed") ? "▸" : "▾";
 });
 
-minimizeBtn.addEventListener("click", () => {
+minimizeBtn.addEventListener("pointerdown", async (e) => {
+  e.preventDefault();
   app.classList.add("hidden");
-  minimizedBtn.classList.remove("hidden");
+  minimizedView.classList.add("visible");
+  await OBR.popover.setWidth(POPOVER_ID, MINIMIZED_SIZE.width);
+  await OBR.popover.setHeight(POPOVER_ID, MINIMIZED_SIZE.height);
 });
-minimizedBtn.addEventListener("click", () => {
+
+minimizedView.addEventListener("pointerdown", async (e) => {
+  e.preventDefault();
   app.classList.remove("hidden");
-  minimizedBtn.classList.add("hidden");
+  minimizedView.classList.remove("visible");
+  await OBR.popover.setWidth(POPOVER_ID, EXPANDED_SIZE.width);
+  await OBR.popover.setHeight(POPOVER_ID, EXPANDED_SIZE.height);
 });
 
 OBR.onReady(async () => {
