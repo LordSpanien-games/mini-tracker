@@ -4,9 +4,9 @@ const overlay = document.getElementById("overlay");
 const pauseBtn = document.getElementById("pauseBtn");
 
 let sceneTokens = [];
-let pending = new Map();
+let pending = new Map();     // pointerId -> {x, y, el, labelEl, hoverTokenId, hoverStart, hoverInterval}
 let links = new Map();       // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout, lastScenePos}
-let frozenLinks = new Map();
+let frozenLinks = new Map(); // tokenId -> {x, y, el, labelEl, timeoutHandle}
 
 const RELINK_WINDOW_MS = 5000;
 const RELINK_RADIUS_PX = 250;
@@ -88,7 +88,6 @@ async function autoAssignFromHover(pointerId, tokenId) {
   console.log(`[Tisch] Auto-Zuordnung (Hover): ${pointerId} -> ${tokenId}`);
 }
 
-// Einzige Definition von doAssign - inkl. Sofort-Teleport-Fix
 function doAssign(pointerId, tokenId, x, y) {
   const token = sceneTokens.find((t) => t.id === tokenId);
   const el = document.createElement("div");
@@ -214,7 +213,12 @@ async function moveLinkedToken(pointerId, x, y) {
   link.lastScenePos = scenePos;
 
   if (!link.interaction) {
-    const token = sceneTokens.find((t) => t.id === link.tokenId);
+    // WICHTIG: frisches Token-Objekt direkt von der Szene holen, nicht aus dem
+    // evtl. veralteten sceneTokens-Cache, damit die Interaction mit dem korrekten,
+    // aktuellen Ausgangszustand (Position) startet und nicht von einer alten
+    // Position aus "hinwandert".
+    const freshItems = await OBR.scene.items.getItems([link.tokenId]);
+    const token = freshItems[0];
     if (!token) return;
     link.interaction = await OBR.interaction.startItemInteraction(token);
   }
