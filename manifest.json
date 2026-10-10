@@ -4,8 +4,8 @@
   "manifest_version": 1,
   "action": {
     "title": "Mini-Tracker",
-    "icon": "icon.svg",
-    "popover": "launcher.html",
+    "icon": "https://lordspanien-games.github.io/mini-tracker/icon.svg",
+    "popover": "https://lordspanien-games.github.io/mini-tracker/launcher.html",
     "height": 200,
     "width": 200
   }
