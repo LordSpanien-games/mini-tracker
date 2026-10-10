@@ -5,27 +5,42 @@
 <style>
   html, body {
     margin: 0;
-    background: #0d1117;
+    background: transparent;
     color: #e6edf3;
     font-family: sans-serif;
     width: 100%;
     height: 100%;
   }
-  #app { padding: 14px; }
-  .panel {
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    margin-bottom: 14px;
-  }
-  .panelHeader {
+  #minimizedBtn {
+    position: fixed;
+    top: 10px; left: 10px;
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: #3a7bd5;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 10px 12px;
+    justify-content: center;
+    font-size: 22px;
     cursor: pointer;
-    user-select: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
   }
+  #minimizedBtn.hidden { display: none; }
+
+  #app {
+    background: #0d1117;
+    padding: 14px;
+    height: 100%;
+    box-sizing: border-box;
+    overflow-y: auto;
+  }
+  #app.hidden { display: none; }
+
+  #appHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  #appHeader h2 { color: #58a6ff; font-size: 16px; margin: 0; }
+  #minimizeBtn { background: #30363d; color: #e6edf3; border: none; border-radius: 5px; padding: 6px 10px; cursor: pointer; font-size: 13px; }
+
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 14px; }
+  .panelHeader { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; cursor: pointer; user-select: none; }
   .panelHeader h3 { margin: 0; font-size: 13px; color: #58a6ff; text-transform: uppercase; }
   .panelHeader .toggle { font-size: 14px; color: #8b949e; }
   .panelBody { padding: 0 12px 12px 12px; }
@@ -36,12 +51,15 @@
   .tokenOption { background: #21262d; padding: 8px 10px; border-radius: 5px; margin-bottom: 4px; cursor: pointer; font-size: 13px; }
   .tokenOption:hover, .tokenOption:active { background: #3a7bd5; }
   #empty { color: #6e7681; font-style: italic; font-size: 13px; padding: 4px 12px 12px; }
-  .confirmFlash { color: #2ecc71; font-size: 12px; margin-top: 4px; }
 </style>
 </head>
 <body>
+<div id="minimizedBtn" class="hidden">🎮</div>
 <div id="app">
-  <h2 style="color:#58a6ff;font-size:16px;">🎮 Steuerungs-Gerät</h2>
+  <div id="appHeader">
+    <h2>🎮 Steuerungs-Gerät</h2>
+    <button id="minimizeBtn">Einklappen</button>
+  </div>
   <div class="panel">
     <div class="panelHeader" id="panelHeader">
       <h3>Offene Zuweisungen</h3>
