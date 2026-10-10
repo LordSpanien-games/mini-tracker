@@ -43,11 +43,28 @@
     font-size: 12px;
     pointer-events: none;
   }
+  #tokenPanel {
+    position: fixed;
+    top: 10px; right: 10px;
+    background: rgba(0,0,0,0.75);
+    color: #fff;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 10px;
+    border-radius: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    min-width: 180px;
+    pointer-events: none;
+  }
+  #tokenPanel h3 { margin: 0 0 6px 0; font-size: 12px; color: #6cf; }
+  #tokenPanel .tok { padding: 2px 0; border-bottom: 1px solid #333; }
 </style>
 </head>
 <body>
 <div id="overlay"></div>
 <div id="debug">Lade SDK...</div>
+<div id="tokenPanel"><h3>Scene Tokens</h3><div id="tokenList">lade...</div></div>
 <script type="module" src="overlay.js"></script>
 </body>
 </html>
