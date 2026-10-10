@@ -7,10 +7,13 @@
   "action": {
     "title": "Mini-Tracker",
     "icon": "/icon.svg",
-    "defaultWidth": 1,
-    "defaultHeight": 1,
-    "background": {
-      "url": "/background.html"
+    "popover": {
+      "url": "/overlay.html",
+      "height": 200,
+      "width": 200
     }
+  },
+  "background": {
+    "url": "/background.html"
   }
 }
