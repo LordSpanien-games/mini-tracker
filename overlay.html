@@ -45,63 +45,10 @@
     border-style: dashed;
     filter: grayscale(0.6);
   }
-  #debug {
-    position: fixed;
-    top: 10px; left: 10px;
-    background: rgba(0,0,0,0.7);
-    color: #0f0;
-    font-family: monospace;
-    padding: 8px;
-    border-radius: 6px;
-    font-size: 12px;
-    pointer-events: none;
-  }
-  #tokenPanel {
-    position: fixed;
-    top: 10px; right: 10px;
-    background: rgba(0,0,0,0.75);
-    color: #fff;
-    font-family: monospace;
-    font-size: 12px;
-    padding: 10px;
-    border-radius: 6px;
-    max-height: 300px;
-    overflow-y: auto;
-    min-width: 180px;
-    pointer-events: none;
-  }
-  #tokenPanel h3 { margin: 0 0 6px 0; font-size: 12px; color: #6cf; }
-  #tokenPanel .tok { padding: 2px 0; border-bottom: 1px solid #333; }
-  #assignMenu {
-    position: fixed;
-    display: none;
-    background: rgba(20,20,20,0.95);
-    border: 2px solid #ffb020;
-    border-radius: 8px;
-    padding: 10px;
-    font-family: sans-serif;
-    font-size: 13px;
-    color: white;
-    z-index: 999;
-    min-width: 180px;
-    max-height: 250px;
-    overflow-y: auto;
-  }
-  .assignOption {
-    padding: 6px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    background: #2a2a2a;
-    margin-bottom: 4px;
-  }
-  .assignOption:active { background: #3a7bd5; }
 </style>
 </head>
 <body>
 <div id="overlay"></div>
-<div id="debug">Lade SDK...</div>
-<div id="tokenPanel"><h3>Scene Tokens</h3><div id="tokenList">lade...</div></div>
-<div id="assignMenu"></div>
 <script type="module" src="overlay.js"></script>
 </body>
 </html>
