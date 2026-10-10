@@ -1,16 +1,13 @@
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/+esm";
 
 const status = document.getElementById("status");
-const btn = document.getElementById("openBtn");
 
-OBR.onReady(() => {
-  status.textContent = "SDK bereit.";
-});
+OBR.onReady(() => { status.textContent = "SDK bereit."; });
 
-async function openOverlay() {
+async function openFullscreen(url, id) {
   await OBR.popover.open({
-    id: "com.minitracker.overlay",
-    url: "https://lordspanien-games.github.io/mini-tracker/overlay.html",
+    id,
+    url,
     width: window.screen.width,
     height: window.screen.height,
     anchorReference: "POSITION",
@@ -18,7 +15,12 @@ async function openOverlay() {
     hidePaper: true,
     disableClickAway: true,
   });
-  status.textContent = "Overlay geöffnet.";
+  status.textContent = "Geöffnet.";
 }
 
-btn.addEventListener("click", openOverlay);
+document.getElementById("tableBtn").addEventListener("click", () =>
+  openFullscreen("https://lordspanien-games.github.io/mini-tracker/overlay.html", "com.minitracker.overlay")
+);
+document.getElementById("hostBtn").addEventListener("click", () =>
+  openFullscreen("https://lordspanien-games.github.io/mini-tracker/control.html", "com.minitracker.control")
+);
