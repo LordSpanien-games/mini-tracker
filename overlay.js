@@ -1,4 +1,4 @@
-import OBR from "./owlbear-sdk.js";
+import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/+esm";
 
 const overlay = document.getElementById("overlay");
 const debug = document.getElementById("debug");
