@@ -4,13 +4,13 @@ const overlay = document.getElementById("overlay");
 const pauseBtn = document.getElementById("pauseBtn");
 
 let sceneTokens = [];
-let pending = new Map();     // pointerId -> {contactId, x, y, el, labelEl, hoverTokenId, hoverStart, hoverInterval}
-let links = new Map();       // pointerId -> {contactId, tokenId, el, labelEl, interaction, moveTimeout, lastScenePos}
-let frozenLinks = new Map(); // tokenId -> {x, y, el, labelEl, timeoutHandle}
+let pending = new Map();
+let links = new Map();
+let frozenLinks = new Map();
 
 const RELINK_WINDOW_MS = 5000;
 const RELINK_RADIUS_PX = 250;
-const STOP_INTERACTION_AFTER_MS = 1200;
+const STOP_INTERACTION_AFTER_MS = 2500; // von 1200 auf 2500 erhöht - mehr Toleranz für Pausen während Bewegung
 const HOVER_LINK_MS = 3000;
 const HOVER_RADIUS_PX = 45;
 const HOVER_CHECK_INTERVAL_MS = 200;
@@ -60,8 +60,6 @@ async function publishContacts() {
   await OBR.room.setMetadata({ [META_KEY_CONTACTS]: contacts });
 }
 
-// Entfernt verbrauchte Einträge aus der Metadata, damit sie nie erneut
-// (fälschlich) angewendet werden können - das war die Hauptursache des Bugs.
 async function cleanupMetadataAfterAssign(contactId) {
   try {
     const meta = await OBR.room.getMetadata();
@@ -75,16 +73,14 @@ async function cleanupMetadataAfterAssign(contactId) {
   }
 }
 
-// ---------- Zuordnung über Host-Dashboard ----------
 function applyLinksFromMetadata(linksFromHost) {
   for (const [contactId, tokenId] of Object.entries(linksFromHost)) {
-    // Suche den passenden offenen Kontakt anhand der eigenen contactId (nicht pointerId!)
     let foundPointerId = null;
     for (const [pid, p] of pending) {
       if (p.contactId === contactId) { foundPointerId = pid; break; }
     }
-    if (foundPointerId === null) continue; // kein passender offener Kontakt (z.B. schon verarbeitet/veraltet)
-    if (links.has(foundPointerId)) continue; // dieser Touch ist bereits aktiv verknüpft - nicht überschreiben!
+    if (foundPointerId === null) continue;
+    if (links.has(foundPointerId)) continue;
 
     const p = pending.get(foundPointerId);
     clearPendingHover(p);
@@ -97,11 +93,10 @@ function applyLinksFromMetadata(linksFromHost) {
   }
 }
 
-// ---------- Zuordnung direkt am Tisch (Hover-Methode) ----------
 async function autoAssignFromHover(pointerId, tokenId) {
   const p = pending.get(pointerId);
   if (!p) return;
-  if (links.has(pointerId)) return; // Sicherheitsnetz
+  if (links.has(pointerId)) return;
   clearPendingHover(p);
   p.el.remove();
   p.labelEl.remove();
@@ -111,14 +106,11 @@ async function autoAssignFromHover(pointerId, tokenId) {
   console.log(`[Tisch] Auto-Zuordnung (Hover): ${pointerId} -> ${tokenId}`);
 }
 
-// ---------- Kernfunktion: Zuordnung herstellen ----------
 function doAssign(pointerId, tokenId, x, y) {
-  // Schutz 1: dieser Touch-Kontakt ist bereits aktiv verknüpft -> nichts tun
   if (links.has(pointerId)) {
     console.warn(`[Tisch] doAssign ignoriert - pointerId ${pointerId} bereits verknüpft.`);
     return;
   }
-  // Schutz 2: dieser Token ist bereits an einen ANDEREN aktiven Kontakt verknüpft -> nichts tun
   if (getLinkedTokenIds().has(tokenId)) {
     console.warn(`[Tisch] doAssign ignoriert - Token ${tokenId} ist bereits anderweitig verknüpft.`);
     return;
@@ -134,13 +126,19 @@ function doAssign(pointerId, tokenId, x, y) {
   overlay.appendChild(labelEl);
 
   positionMarkerAndLabel(el, labelEl, x, y);
-  links.set(pointerId, { tokenId, el, labelEl, interaction: null, moveTimeout: null, lastScenePos: token?.position || null });
+  links.set(pointerId, {
+    tokenId, el, labelEl,
+    interaction: null,
+    moveTimeout: null,
+    lastScenePos: token?.position || null,
+    starting: false, // Schutz gegen doppelten Interaction-Start (Race Condition)
+  });
 
   showLockFlash(x, y);
   commitPositionImmediate(tokenId, x, y);
+  console.log(`[Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}`);
 }
 
-// Kurzer visueller Bestätigungs-Blitz beim Locken (ersetzt den dauerhaften Marker)
 function showLockFlash(x, y) {
   const flash = document.createElement("div");
   flash.className = "lockFlash";
@@ -158,7 +156,6 @@ async function commitPositionImmediate(tokenId, x, y) {
     });
     const link = [...links.values()].find((l) => l.tokenId === tokenId);
     if (link) link.lastScenePos = scenePos;
-    console.log(`[Tisch] Sofort-Teleport für ${tokenId}:`, scenePos);
   } catch (err) {
     console.error("[Tisch] Fehler beim Sofort-Teleport:", err);
   }
@@ -186,7 +183,6 @@ function createPendingMarker(contactId, x, y) {
   return { el, labelEl };
 }
 
-// ---------- Hover-zu-Token Prüfung ----------
 function startHoverCheck(pointerId) {
   const p = pending.get(pointerId);
   if (!p) return;
@@ -232,7 +228,6 @@ function clearPendingHover(p) {
   if (p.hoverInterval) clearInterval(p.hoverInterval);
 }
 
-// ---------- Re-Link bei Wiederaufsetzen (rein lokal, pointerId-unabhängig) ----------
 function tryRelink(pointerId, x, y) {
   let bestTokenId = null, bestDist = Infinity;
   for (const [tokenId, f] of frozenLinks) {
@@ -252,7 +247,6 @@ function tryRelink(pointerId, x, y) {
   return false;
 }
 
-// ---------- Bewegung ----------
 async function moveLinkedToken(pointerId, x, y) {
   const link = links.get(pointerId);
   if (!link) return;
@@ -262,11 +256,34 @@ async function moveLinkedToken(pointerId, x, y) {
   link.lastScenePos = scenePos;
 
   if (!link.interaction) {
-    const freshItems = await OBR.scene.items.getItems([link.tokenId]);
-    const token = freshItems[0];
-    if (!token) return;
-    link.interaction = await OBR.interaction.startItemInteraction(token);
+    if (link.starting) {
+      // Es läuft bereits ein Start-Vorgang (async) - nicht doppelt starten.
+      return;
+    }
+    link.starting = true;
+    console.log(`[Tisch] Starte Interaction für ${link.tokenId}...`);
+    try {
+      const freshItems = await OBR.scene.items.getItems([link.tokenId]);
+      const token = freshItems[0];
+      if (!token) {
+        console.warn(`[Tisch] Token ${link.tokenId} nicht mehr gefunden beim Interaction-Start.`);
+        link.starting = false;
+        return;
+      }
+      // Erneut prüfen, ob link noch gültig ist (könnte währenddessen aufgehoben worden sein)
+      if (!links.has(pointerId)) { link.starting = false; return; }
+      link.interaction = await OBR.interaction.startItemInteraction(token);
+      link.starting = false;
+      console.log(`[Tisch] Interaction gestartet für ${link.tokenId}.`);
+    } catch (err) {
+      console.error(`[Tisch] Fehler beim Starten der Interaction:`, err);
+      link.starting = false;
+      return;
+    }
   }
+
+  if (!link.interaction) return; // falls Start inzwischen fehlgeschlagen ist
+
   const [update] = link.interaction;
   update((draft) => { draft.position = scenePos; });
 
@@ -280,6 +297,7 @@ async function stopInteraction(pointerId) {
   const [, stop] = link.interaction;
   stop();
   link.interaction = null;
+  console.log(`[Tisch] Interaction gestoppt für ${link.tokenId}.`);
 
   if (link.lastScenePos) {
     try {
@@ -295,6 +313,7 @@ async function stopInteraction(pointerId) {
 async function handleLinkedUp(pointerId) {
   const link = links.get(pointerId);
   if (!link) return;
+  console.log(`[Tisch] pointerUp für verknüpften Kontakt ${pointerId}, Token ${link.tokenId} -> wird eingefroren.`);
   await stopInteraction(pointerId);
   const rect = link.el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
@@ -308,18 +327,20 @@ async function handleLinkedUp(pointerId) {
     link.el.remove();
     link.labelEl.remove();
     frozenLinks.delete(link.tokenId);
+    console.log(`[Tisch] Re-Link-Fenster abgelaufen für Token ${link.tokenId}.`);
   }, RELINK_WINDOW_MS);
 
   frozenLinks.set(link.tokenId, { x, y, el: link.el, labelEl: link.labelEl, timeoutHandle });
   links.delete(pointerId);
 }
 
-// ---------- Pointer-Events ----------
 overlay.addEventListener("pointerdown", (e) => {
   if (e.target !== overlay) return;
   const { pointerId, clientX: x, clientY: y } = e;
 
-  if (links.has(pointerId)) return; // dieser Kontakt ist bereits aktiv verknüpft, nicht neu starten
+  console.log(`[Tisch] pointerdown: id=${pointerId}, type=${e.pointerType}, bereits verlinkt=${links.has(pointerId)}`);
+
+  if (links.has(pointerId)) return;
   if (tryRelink(pointerId, x, y)) return;
 
   const contactId = genId();
@@ -328,7 +349,6 @@ overlay.addEventListener("pointerdown", (e) => {
   pending.set(pointerId, entry);
   startHoverCheck(pointerId);
   publishContacts();
-  console.log(`[Tisch] Neuer Kontakt: pointerId=${pointerId}, contactId=${contactId.slice(0,8)}, type=${e.pointerType}`);
 });
 
 overlay.addEventListener("pointermove", (e) => {
@@ -340,6 +360,7 @@ overlay.addEventListener("pointermove", (e) => {
 
 overlay.addEventListener("pointerup", (e) => {
   const { pointerId } = e;
+  console.log(`[Tisch] pointerup: id=${pointerId}`);
   const p = pending.get(pointerId);
   if (p) {
     clearPendingHover(p);
@@ -352,5 +373,8 @@ overlay.addEventListener("pointerup", (e) => {
   handleLinkedUp(pointerId);
 });
 
-overlay.addEventListener("pointercancel", (e) => overlay.dispatchEvent(new PointerEvent("pointerup", e)));
+overlay.addEventListener("pointercancel", (e) => {
+  console.log(`[Tisch] pointercancel: id=${e.pointerId}`);
+  overlay.dispatchEvent(new PointerEvent("pointerup", e));
+});
 overlay.addEventListener("contextmenu", (e) => e.preventDefault());
