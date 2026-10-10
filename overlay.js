@@ -3,13 +3,17 @@ import OBR, { isImage } from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/+e
 const overlay = document.getElementById("overlay");
 
 let sceneTokens = [];
-let pending = new Map();     // pointerId -> {x, y, el, labelEl}
+let pending = new Map();     // pointerId -> {x, y, el, labelEl, hoverTokenId, hoverStart, hoverInterval}
 let links = new Map();       // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout}
 let frozenLinks = new Map(); // tokenId -> {x, y, el, labelEl, timeoutHandle}
 
-const RELINK_WINDOW_MS = 8000;
+const RELINK_WINDOW_MS = 5000;      // Punkt 4: 5 Sekunden Zeit zum Neuplatzieren
 const RELINK_RADIUS_PX = 60;
 const STOP_INTERACTION_AFTER_MS = 1200;
+const HOVER_LINK_MS = 3000;         // Punkt 2: 3 Sekunden auf Token stehen = Auto-Zuordnung
+const HOVER_RADIUS_PX = 45;
+const HOVER_CHECK_INTERVAL_MS = 200;
+
 const META_KEY_CONTACTS = "com.minitracker/contacts";
 const META_KEY_LINKS = "com.minitracker/links";
 
@@ -21,11 +25,8 @@ OBR.onReady(async () => {
   OBR.scene.items.onChange(async () => { await loadTokens(); });
 
   const meta = await OBR.room.getMetadata();
-  console.log("[Tisch] Initiale Metadata:", meta);
   applyLinksFromMetadata(meta[META_KEY_LINKS] || {});
-
   OBR.room.onMetadataChange((metadata) => {
-    console.log("[Tisch] Metadata-Änderung empfangen:", metadata[META_KEY_LINKS]);
     applyLinksFromMetadata(metadata[META_KEY_LINKS] || {});
   });
 });
@@ -37,41 +38,60 @@ async function loadTokens() {
   console.log("[Tisch] Tokens geladen:", sceneTokens.map(t => t.name));
 }
 
+function getLinkedTokenIds() {
+  return new Set([...links.values()].map((l) => l.tokenId));
+}
+
 async function publishContacts() {
   const contacts = {};
   for (const [pointerId, p] of pending) contacts[pointerId] = { x: p.x, y: p.y };
+  const meta = await OBR.room.getMetadata();
   await OBR.room.setMetadata({ [META_KEY_CONTACTS]: contacts });
-  console.log("[Tisch] Kontakte veröffentlicht:", contacts);
 }
 
+// ---------- Zuordnung über Host-Dashboard ----------
 function applyLinksFromMetadata(linksFromHost) {
   for (const [pointerIdStr, tokenId] of Object.entries(linksFromHost)) {
     const pointerId = Number(pointerIdStr);
     if (links.has(pointerId)) continue;
     const p = pending.get(pointerId);
-    if (!p) {
-      console.warn(`[Tisch] Link für ${pointerId} empfangen, aber kein offener Kontakt vorhanden (Mini evtl. nicht mehr auf dem Feld)`);
-      continue;
-    }
+    if (!p) continue;
+    clearPendingHover(p);
     p.el.remove();
     p.labelEl.remove();
     pending.delete(pointerId);
     doAssign(pointerId, tokenId, p.x, p.y);
     publishContacts();
-    console.log(`[Tisch] ERFOLG: Kontakt ${pointerId} -> Token ${tokenId} verknüpft`);
+    console.log(`[Tisch] Host-Zuordnung: ${pointerId} -> ${tokenId}`);
   }
+}
+
+// ---------- Zuordnung direkt am Tisch (Hover-Methode) ----------
+async function autoAssignFromHover(pointerId, tokenId) {
+  const p = pending.get(pointerId);
+  if (!p) return;
+  clearPendingHover(p);
+  p.el.remove();
+  p.labelEl.remove();
+  pending.delete(pointerId);
+  doAssign(pointerId, tokenId, p.x, p.y);
+
+  const meta = await OBR.room.getMetadata();
+  const newLinks = { ...(meta[META_KEY_LINKS] || {}), [pointerId]: tokenId };
+  const newContacts = { ...(meta[META_KEY_CONTACTS] || {}) };
+  delete newContacts[pointerId];
+  await OBR.room.setMetadata({ [META_KEY_LINKS]: newLinks, [META_KEY_CONTACTS]: newContacts });
+  console.log(`[Tisch] Auto-Zuordnung (Hover): ${pointerId} -> ${tokenId}`);
 }
 
 function doAssign(pointerId, tokenId, x, y) {
   const token = sceneTokens.find((t) => t.id === tokenId);
   const el = document.createElement("div");
-  el.className = "marker linked";
-  el.textContent = (token?.name || "?").slice(0, 2).toUpperCase();
+  el.className = "marker linked"; // unsichtbar, nur zum internen Tracking
   overlay.appendChild(el);
 
   const labelEl = document.createElement("div");
-  labelEl.className = "idLabel";
-  labelEl.textContent = `#${pointerId}`;
+  labelEl.className = "idLabel hidden"; // Label nach Zuordnung ausblenden
   overlay.appendChild(labelEl);
 
   positionMarkerAndLabel(el, labelEl, x, y);
@@ -100,6 +120,57 @@ function createPendingMarker(pointerId, x, y) {
   return { el, labelEl };
 }
 
+// ---------- Hover-zu-Token Prüfung (Punkt 2) ----------
+function startHoverCheck(pointerId) {
+  const p = pending.get(pointerId);
+  if (!p) return;
+  p.hoverTokenId = null;
+  p.hoverStart = null;
+  p.hoverInterval = setInterval(async () => {
+    const current = pending.get(pointerId);
+    if (!current) return;
+    const linkedIds = getLinkedTokenIds();
+    const candidates = sceneTokens.filter((t) => !linkedIds.has(t.id));
+
+    let closestId = null;
+    let closestDist = Infinity;
+    for (const token of candidates) {
+      try {
+        const screenPos = await OBR.viewport.transformPoint(token.position);
+        const dist = Math.hypot(screenPos.x - current.x, screenPos.y - current.y);
+        if (dist <= HOVER_RADIUS_PX && dist < closestDist) {
+          closestDist = dist;
+          closestId = token.id;
+        }
+      } catch (err) { /* ignorieren, Token evtl. gerade entfernt */ }
+    }
+
+    if (closestId) {
+      if (current.hoverTokenId === closestId) {
+        const elapsed = Date.now() - current.hoverStart;
+        current.el.classList.add("hovering");
+        if (elapsed >= HOVER_LINK_MS) {
+          clearInterval(current.hoverInterval);
+          autoAssignFromHover(pointerId, closestId);
+        }
+      } else {
+        current.hoverTokenId = closestId;
+        current.hoverStart = Date.now();
+        current.el.classList.add("hovering");
+      }
+    } else {
+      current.hoverTokenId = null;
+      current.hoverStart = null;
+      current.el.classList.remove("hovering");
+    }
+  }, HOVER_CHECK_INTERVAL_MS);
+}
+
+function clearPendingHover(p) {
+  if (p.hoverInterval) clearInterval(p.hoverInterval);
+}
+
+// ---------- Re-Link bei Wiederaufsetzen (Punkt 4) ----------
 function tryRelink(pointerId, x, y) {
   let bestTokenId = null, bestDist = Infinity;
   for (const [tokenId, f] of frozenLinks) {
@@ -113,12 +184,13 @@ function tryRelink(pointerId, x, y) {
     f.labelEl.remove();
     frozenLinks.delete(bestTokenId);
     doAssign(pointerId, bestTokenId, x, y);
-    console.log(`[Tisch] Re-Link: ${pointerId} -> ${bestTokenId}`);
+    console.log(`[Tisch] Re-Link erfolgreich: ${pointerId} -> ${bestTokenId}`);
     return true;
   }
   return false;
 }
 
+// ---------- Bewegung ----------
 async function moveLinkedToken(pointerId, x, y) {
   const link = links.get(pointerId);
   if (!link) return;
@@ -153,24 +225,31 @@ function handleLinkedUp(pointerId) {
   const rect = link.el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
+  link.el.classList.remove("linked");
   link.el.classList.add("frozen");
+  link.labelEl.classList.remove("hidden");
+  link.labelEl.textContent = "wartet...";
+
   const timeoutHandle = setTimeout(() => {
     link.el.remove();
     link.labelEl.remove();
     frozenLinks.delete(link.tokenId);
   }, RELINK_WINDOW_MS);
+
   frozenLinks.set(link.tokenId, { x, y, el: link.el, labelEl: link.labelEl, timeoutHandle });
   links.delete(pointerId);
 }
 
+// ---------- Pointer-Events ----------
 overlay.addEventListener("pointerdown", (e) => {
   if (e.target !== overlay) return;
   const { pointerId, clientX: x, clientY: y } = e;
   if (tryRelink(pointerId, x, y)) return;
   const { el, labelEl } = createPendingMarker(pointerId, x, y);
-  pending.set(pointerId, { x, y, el, labelEl });
+  const entry = { x, y, el, labelEl, hoverTokenId: null, hoverStart: null, hoverInterval: null };
+  pending.set(pointerId, entry);
+  startHoverCheck(pointerId);
   publishContacts();
-  console.log(`[Tisch] Neuer Kontakt erstellt: ${pointerId}`);
 });
 
 overlay.addEventListener("pointermove", (e) => {
@@ -183,7 +262,14 @@ overlay.addEventListener("pointermove", (e) => {
 overlay.addEventListener("pointerup", (e) => {
   const { pointerId } = e;
   const p = pending.get(pointerId);
-  if (p) { p.el.remove(); p.labelEl.remove(); pending.delete(pointerId); publishContacts(); return; }
+  if (p) {
+    clearPendingHover(p);
+    p.el.remove();
+    p.labelEl.remove();
+    pending.delete(pointerId);
+    publishContacts();
+    return;
+  }
   handleLinkedUp(pointerId);
 });
 
