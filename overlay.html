@@ -22,8 +22,6 @@
     position: absolute;
     width: 50px; height: 50px;
     border-radius: 50%;
-    background: rgba(255, 50, 50, 0.6);
-    border: 3px solid white;
     transform: translate(-50%, -50%);
     display: flex;
     align-items: center;
@@ -31,6 +29,21 @@
     color: white;
     font-weight: bold;
     font-family: sans-serif;
+    font-size: 13px;
+    border: 3px solid white;
+  }
+  .marker.pending {
+    background: repeating-linear-gradient(45deg, rgba(255,176,32,0.5) 0 10px, rgba(255,176,32,0.2) 10px 20px);
+    border-color: #ffb020;
+    border-style: dashed;
+  }
+  .marker.linked {
+    background: rgba(46, 204, 113, 0.7);
+  }
+  .marker.frozen {
+    opacity: 0.35;
+    border-style: dashed;
+    filter: grayscale(0.6);
   }
   #debug {
     position: fixed;
@@ -59,12 +72,36 @@
   }
   #tokenPanel h3 { margin: 0 0 6px 0; font-size: 12px; color: #6cf; }
   #tokenPanel .tok { padding: 2px 0; border-bottom: 1px solid #333; }
+  #assignMenu {
+    position: fixed;
+    display: none;
+    background: rgba(20,20,20,0.95);
+    border: 2px solid #ffb020;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: sans-serif;
+    font-size: 13px;
+    color: white;
+    z-index: 999;
+    min-width: 180px;
+    max-height: 250px;
+    overflow-y: auto;
+  }
+  .assignOption {
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    background: #2a2a2a;
+    margin-bottom: 4px;
+  }
+  .assignOption:active { background: #3a7bd5; }
 </style>
 </head>
 <body>
 <div id="overlay"></div>
 <div id="debug">Lade SDK...</div>
 <div id="tokenPanel"><h3>Scene Tokens</h3><div id="tokenList">lade...</div></div>
+<div id="assignMenu"></div>
 <script type="module" src="overlay.js"></script>
 </body>
 </html>
