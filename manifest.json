@@ -6,7 +6,7 @@
     "title": "Mini-Tracker",
     "icon": "https://lordspanien-games.github.io/mini-tracker/icon.svg",
     "popover": "https://lordspanien-games.github.io/mini-tracker/launcher.html",
-    "height": 200,
-    "width": 200
+    "height": 220,
+    "width": 280
   }
 }
