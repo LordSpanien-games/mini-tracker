@@ -1,21 +1,29 @@
 import OBR, { isImage } from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/+esm";
 
 const overlay = document.getElementById("overlay");
+const pauseBtn = document.getElementById("pauseBtn");
 
 let sceneTokens = [];
-let pending = new Map();     // pointerId -> {x, y, el, labelEl, hoverTokenId, hoverStart, hoverInterval}
-let links = new Map();       // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout}
-let frozenLinks = new Map(); // tokenId -> {x, y, el, labelEl, timeoutHandle}
+let pending = new Map();
+let links = new Map();       // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout, lastScenePos}
+let frozenLinks = new Map();
 
-const RELINK_WINDOW_MS = 5000;      // Punkt 4: 5 Sekunden Zeit zum Neuplatzieren
-const RELINK_RADIUS_PX = 60;
+const RELINK_WINDOW_MS = 5000;
+const RELINK_RADIUS_PX = 250;   // deutlich erhöht (war 60)
 const STOP_INTERACTION_AFTER_MS = 1200;
-const HOVER_LINK_MS = 3000;         // Punkt 2: 3 Sekunden auf Token stehen = Auto-Zuordnung
+const HOVER_LINK_MS = 3000;
 const HOVER_RADIUS_PX = 45;
 const HOVER_CHECK_INTERVAL_MS = 200;
 
 const META_KEY_CONTACTS = "com.minitracker/contacts";
 const META_KEY_LINKS = "com.minitracker/links";
+const POPOVER_ID = "com.minitracker.overlay";
+
+pauseBtn.addEventListener("pointerdown", async (e) => {
+  e.stopPropagation();
+  console.log("[Tisch] Pause gedrückt - schließe Overlay. Zum Fortsetzen: Action-Icon -> Tisch-Gerät.");
+  await OBR.popover.close(POPOVER_ID);
+});
 
 OBR.onReady(async () => {
   console.log("[Tisch] SDK bereit.");
@@ -35,7 +43,6 @@ async function loadTokens() {
   sceneTokens = await OBR.scene.items.getItems(
     (item) => item.layer === "CHARACTER" && isImage(item)
   );
-  console.log("[Tisch] Tokens geladen:", sceneTokens.map(t => t.name));
 }
 
 function getLinkedTokenIds() {
@@ -45,11 +52,9 @@ function getLinkedTokenIds() {
 async function publishContacts() {
   const contacts = {};
   for (const [pointerId, p] of pending) contacts[pointerId] = { x: p.x, y: p.y };
-  const meta = await OBR.room.getMetadata();
   await OBR.room.setMetadata({ [META_KEY_CONTACTS]: contacts });
 }
 
-// ---------- Zuordnung über Host-Dashboard ----------
 function applyLinksFromMetadata(linksFromHost) {
   for (const [pointerIdStr, tokenId] of Object.entries(linksFromHost)) {
     const pointerId = Number(pointerIdStr);
@@ -66,7 +71,6 @@ function applyLinksFromMetadata(linksFromHost) {
   }
 }
 
-// ---------- Zuordnung direkt am Tisch (Hover-Methode) ----------
 async function autoAssignFromHover(pointerId, tokenId) {
   const p = pending.get(pointerId);
   if (!p) return;
@@ -87,15 +91,15 @@ async function autoAssignFromHover(pointerId, tokenId) {
 function doAssign(pointerId, tokenId, x, y) {
   const token = sceneTokens.find((t) => t.id === tokenId);
   const el = document.createElement("div");
-  el.className = "marker linked"; // unsichtbar, nur zum internen Tracking
+  el.className = "marker linked";
   overlay.appendChild(el);
 
   const labelEl = document.createElement("div");
-  labelEl.className = "idLabel hidden"; // Label nach Zuordnung ausblenden
+  labelEl.className = "idLabel hidden";
   overlay.appendChild(labelEl);
 
   positionMarkerAndLabel(el, labelEl, x, y);
-  links.set(pointerId, { tokenId, el, labelEl, interaction: null, moveTimeout: null });
+  links.set(pointerId, { tokenId, el, labelEl, interaction: null, moveTimeout: null, lastScenePos: token?.position || null });
 }
 
 function positionMarkerAndLabel(el, labelEl, x, y) {
@@ -120,7 +124,6 @@ function createPendingMarker(pointerId, x, y) {
   return { el, labelEl };
 }
 
-// ---------- Hover-zu-Token Prüfung (Punkt 2) ----------
 function startHoverCheck(pointerId) {
   const p = pending.get(pointerId);
   if (!p) return;
@@ -132,17 +135,13 @@ function startHoverCheck(pointerId) {
     const linkedIds = getLinkedTokenIds();
     const candidates = sceneTokens.filter((t) => !linkedIds.has(t.id));
 
-    let closestId = null;
-    let closestDist = Infinity;
+    let closestId = null, closestDist = Infinity;
     for (const token of candidates) {
       try {
         const screenPos = await OBR.viewport.transformPoint(token.position);
         const dist = Math.hypot(screenPos.x - current.x, screenPos.y - current.y);
-        if (dist <= HOVER_RADIUS_PX && dist < closestDist) {
-          closestDist = dist;
-          closestId = token.id;
-        }
-      } catch (err) { /* ignorieren, Token evtl. gerade entfernt */ }
+        if (dist <= HOVER_RADIUS_PX && dist < closestDist) { closestDist = dist; closestId = token.id; }
+      } catch (err) {}
     }
 
     if (closestId) {
@@ -170,11 +169,12 @@ function clearPendingHover(p) {
   if (p.hoverInterval) clearInterval(p.hoverInterval);
 }
 
-// ---------- Re-Link bei Wiederaufsetzen (Punkt 4) ----------
 function tryRelink(pointerId, x, y) {
   let bestTokenId = null, bestDist = Infinity;
+  console.log(`[Tisch] Re-Link Versuch für ${pointerId} bei (${Math.round(x)},${Math.round(y)}). Eingefrorene Links: ${frozenLinks.size}`);
   for (const [tokenId, f] of frozenLinks) {
     const dist = Math.hypot(f.x - x, f.y - y);
+    console.log(`  - Token ${tokenId}: Distanz ${Math.round(dist)}px (Radius: ${RELINK_RADIUS_PX}px)`);
     if (dist <= RELINK_RADIUS_PX && dist < bestDist) { bestDist = dist; bestTokenId = tokenId; }
   }
   if (bestTokenId) {
@@ -184,19 +184,20 @@ function tryRelink(pointerId, x, y) {
     f.labelEl.remove();
     frozenLinks.delete(bestTokenId);
     doAssign(pointerId, bestTokenId, x, y);
-    console.log(`[Tisch] Re-Link erfolgreich: ${pointerId} -> ${bestTokenId}`);
+    console.log(`[Tisch] Re-Link ERFOLGREICH: ${pointerId} -> ${bestTokenId}`);
     return true;
   }
+  console.log(`[Tisch] Re-Link fehlgeschlagen - kein Treffer im Radius.`);
   return false;
 }
 
-// ---------- Bewegung ----------
 async function moveLinkedToken(pointerId, x, y) {
   const link = links.get(pointerId);
   if (!link) return;
   positionMarkerAndLabel(link.el, link.labelEl, x, y);
 
   const scenePos = await OBR.viewport.inverseTransformPoint({ x, y });
+  link.lastScenePos = scenePos;
 
   if (!link.interaction) {
     const token = sceneTokens.find((t) => t.id === link.tokenId);
@@ -210,18 +211,31 @@ async function moveLinkedToken(pointerId, x, y) {
   link.moveTimeout = setTimeout(() => stopInteraction(pointerId), STOP_INTERACTION_AFTER_MS);
 }
 
-function stopInteraction(pointerId) {
+async function stopInteraction(pointerId) {
   const link = links.get(pointerId);
   if (!link || !link.interaction) return;
   const [, stop] = link.interaction;
   stop();
   link.interaction = null;
+
+  // KRITISCHER FIX: finale Position dauerhaft im echten Scene-Item speichern,
+  // sonst springt die Darstellung nach Interaction-Ende zur alten Position zurück.
+  if (link.lastScenePos) {
+    try {
+      await OBR.scene.items.updateItems([link.tokenId], (items) => {
+        for (const item of items) item.position = link.lastScenePos;
+      });
+      console.log(`[Tisch] Position committed für Token ${link.tokenId}:`, link.lastScenePos);
+    } catch (err) {
+      console.error("[Tisch] Fehler beim Committen der Position:", err);
+    }
+  }
 }
 
-function handleLinkedUp(pointerId) {
+async function handleLinkedUp(pointerId) {
   const link = links.get(pointerId);
   if (!link) return;
-  stopInteraction(pointerId);
+  await stopInteraction(pointerId);
   const rect = link.el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
@@ -230,17 +244,19 @@ function handleLinkedUp(pointerId) {
   link.labelEl.classList.remove("hidden");
   link.labelEl.textContent = "wartet...";
 
+  console.log(`[Tisch] Mini hochgenommen, Token ${link.tokenId} eingefroren bei (${Math.round(x)},${Math.round(y)})`);
+
   const timeoutHandle = setTimeout(() => {
     link.el.remove();
     link.labelEl.remove();
     frozenLinks.delete(link.tokenId);
+    console.log(`[Tisch] Re-Link-Zeitfenster für ${link.tokenId} abgelaufen.`);
   }, RELINK_WINDOW_MS);
 
   frozenLinks.set(link.tokenId, { x, y, el: link.el, labelEl: link.labelEl, timeoutHandle });
   links.delete(pointerId);
 }
 
-// ---------- Pointer-Events ----------
 overlay.addEventListener("pointerdown", (e) => {
   if (e.target !== overlay) return;
   const { pointerId, clientX: x, clientY: y } = e;
