@@ -1,13 +1,11 @@
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/+esm";
 
-const status = document.getElementById("status");
+OBR.onReady(() => {});
 
-OBR.onReady(() => { status.textContent = "SDK bereit."; });
-
-async function openFullscreen(url, id) {
+async function openTableOverlay() {
   await OBR.popover.open({
-    id,
-    url,
+    id: "com.minitracker.overlay",
+    url: "https://lordspanien-games.github.io/mini-tracker/overlay.html",
     width: window.screen.width,
     height: window.screen.height,
     anchorReference: "POSITION",
@@ -15,12 +13,21 @@ async function openFullscreen(url, id) {
     hidePaper: true,
     disableClickAway: true,
   });
-  status.textContent = "Geöffnet.";
+  await OBR.action.close();
 }
 
-document.getElementById("tableBtn").addEventListener("click", () =>
-  openFullscreen("https://lordspanien-games.github.io/mini-tracker/overlay.html", "com.minitracker.overlay")
-);
-document.getElementById("hostBtn").addEventListener("click", () =>
-  openFullscreen("https://lordspanien-games.github.io/mini-tracker/control.html", "com.minitracker.control")
-);
+async function openHostDashboard() {
+  await OBR.popover.open({
+    id: "com.minitracker.control",
+    url: "https://lordspanien-games.github.io/mini-tracker/control.html",
+    width: 420,
+    height: 640,
+    anchorReference: "POSITION",
+    anchorPosition: { left: 80, top: 80 },
+    disableClickAway: true,
+  });
+  await OBR.action.close();
+}
+
+document.getElementById("tableBtn").addEventListener("click", openTableOverlay);
+document.getElementById("hostBtn").addEventListener("click", openHostDashboard);
