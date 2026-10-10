@@ -4,13 +4,16 @@
 <meta charset="UTF-8">
 <style>
   body { margin: 0; font-family: sans-serif; background: #1a1a1a; color: #eee; padding: 16px; }
-  button { width: 100%; padding: 12px; font-size: 14px; border-radius: 6px; border: none; background: #3a7bd5; color: white; cursor: pointer; }
+  button { width: 100%; padding: 12px; font-size: 14px; border-radius: 6px; border: none; margin-bottom: 10px; cursor: pointer; color: white; }
+  #tableBtn { background: #3a7bd5; }
+  #hostBtn { background: #27ae60; }
   #status { margin-top: 10px; font-size: 12px; color: #0f0; }
 </style>
 </head>
 <body>
-<p>Mini-Tracker Overlay</p>
-<button id="openBtn">Vollbild-Overlay öffnen</button>
+<p>Mini-Tracker – Rolle wählen</p>
+<button id="tableBtn">Als TISCH-Gerät starten</button>
+<button id="hostBtn">Als STEUERUNGS-Gerät starten</button>
 <div id="status"></div>
 <script type="module" src="launcher.js"></script>
 </body>
