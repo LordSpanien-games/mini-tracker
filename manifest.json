@@ -4,8 +4,8 @@
   "manifest_version": 1,
   "action": {
     "title": "Mini-Tracker",
-    "icon": "/icon.svg",
-    "popover": "/launcher.html",
+    "icon": "icon.svg",
+    "popover": "launcher.html",
     "height": 200,
     "width": 200
   }
