@@ -4,63 +4,37 @@
 <meta charset="UTF-8">
 <style>
   html, body {
-    margin: 0;
-    padding: 0;
-    background: transparent;
-    overflow: hidden;
-    width: 100%;
-    height: 100%;
+    margin: 0; padding: 0; background: transparent; overflow: hidden; width: 100%; height: 100%;
   }
-  #overlay {
-    position: fixed;
-    top: 0; left: 0;
-    width: 100vw;
-    height: 100vh;
-    touch-action: none;
-  }
+  #overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; touch-action: none; }
   .marker {
-    position: absolute;
-    width: 50px; height: 50px;
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-weight: bold;
-    font-family: sans-serif;
-    font-size: 13px;
-    border: 3px solid white;
+    position: absolute; width: 50px; height: 50px; border-radius: 50%;
+    transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: bold; font-family: sans-serif; font-size: 13px; border: 3px solid white;
   }
   .marker.pending {
     background: repeating-linear-gradient(45deg, rgba(255,176,32,0.5) 0 10px, rgba(255,176,32,0.2) 10px 20px);
-    border-color: #ffb020;
-    border-style: dashed;
+    border-color: #ffb020; border-style: dashed;
   }
-  .marker.linked {
-    background: rgba(46, 204, 113, 0.7);
-  }
-  .marker.frozen {
-    opacity: 0.35;
-    border-style: dashed;
-    filter: grayscale(0.6);
-  }
+  .marker.hovering { border-color: #2ecc71; border-width: 4px; }
+  .marker.linked { opacity: 0; border: none; }
+  .marker.frozen { opacity: 0.3; border-style: dashed; filter: grayscale(0.6); background: rgba(150,150,150,0.3); }
   .idLabel {
-    position: absolute;
-    transform: translate(-50%, 0);
-    font-family: monospace;
-    font-size: 12px;
-    font-weight: bold;
-    background: rgba(0,0,0,0.75);
-    color: #ffb020;
-    padding: 2px 6px;
-    border-radius: 4px;
+    position: absolute; transform: translate(-50%, 0); font-family: monospace; font-size: 12px;
+    font-weight: bold; background: rgba(0,0,0,0.75); color: #ffb020; padding: 2px 6px; border-radius: 4px;
     white-space: nowrap;
+  }
+  .idLabel.hidden { display: none; }
+  #pauseBtn {
+    position: fixed; bottom: 16px; right: 16px; width: 44px; height: 44px; border-radius: 50%;
+    background: rgba(0,0,0,0.6); color: white; display: flex; align-items: center; justify-content: center;
+    font-size: 18px; z-index: 1000; touch-action: none; cursor: pointer;
   }
 </style>
 </head>
 <body>
 <div id="overlay"></div>
-<script type="module" src="overlay.js"></script>
+<div id="pauseBtn">⏸</div>
+<script type="module" src="overlay.js?v=6"></script>
 </body>
 </html>
