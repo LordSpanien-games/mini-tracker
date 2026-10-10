@@ -1,12 +1,11 @@
 import OBR, { isImage } from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/+esm";
 
 const overlay = document.getElementById("overlay");
-const debug = document.getElementById("debug");
 
 let sceneTokens = [];
-let pending = new Map();        // pointerId -> {x, y, el}
-let links = new Map();          // pointerId -> {tokenId, el, interaction, moveTimeout}
-let frozenLinks = new Map();    // tokenId -> {x, y, el, timeoutHandle}
+let pending = new Map();
+let links = new Map();
+let frozenLinks = new Map();
 
 const RELINK_WINDOW_MS = 8000;
 const RELINK_RADIUS_PX = 60;
@@ -15,13 +14,12 @@ const META_KEY_CONTACTS = "com.minitracker/contacts";
 const META_KEY_LINKS = "com.minitracker/links";
 
 OBR.onReady(async () => {
-  debug.textContent = "SDK bereit.";
+  console.log("[Tisch] SDK bereit.");
   const ready = await OBR.scene.isReady();
   if (ready) await loadTokens();
   OBR.scene.onReadyChange(async (isReady) => { if (isReady) await loadTokens(); });
   OBR.scene.items.onChange(async () => { await loadTokens(); });
 
-  // Zuordnungen vom Host lesen
   const meta = await OBR.room.getMetadata();
   applyLinksFromMetadata(meta[META_KEY_LINKS] || {});
   OBR.room.onMetadataChange((metadata) => {
@@ -33,28 +31,26 @@ async function loadTokens() {
   sceneTokens = await OBR.scene.items.getItems(
     (item) => item.layer === "CHARACTER" && isImage(item)
   );
+  console.log("[Tisch] Tokens geladen:", sceneTokens.length);
 }
 
-// ---------- Kontakte an Host melden ----------
 async function publishContacts() {
   const contacts = {};
-  for (const [pointerId, p] of pending) {
-    contacts[pointerId] = { x: p.x, y: p.y };
-  }
+  for (const [pointerId, p] of pending) contacts[pointerId] = { x: p.x, y: p.y };
   await OBR.room.setMetadata({ [META_KEY_CONTACTS]: contacts });
 }
 
-// ---------- Links vom Host anwenden ----------
 function applyLinksFromMetadata(linksFromHost) {
   for (const [pointerIdStr, tokenId] of Object.entries(linksFromHost)) {
     const pointerId = Number(pointerIdStr);
-    if (links.has(pointerId)) continue; // schon verknüpft
+    if (links.has(pointerId)) continue;
     const p = pending.get(pointerId);
-    if (!p) continue; // Kontakt existiert hier (noch) nicht (z.B. schon abgehoben)
-    doAssign(pointerId, tokenId, p.x, p.y);
+    if (!p) continue;
     p.el.remove();
     pending.delete(pointerId);
+    doAssign(pointerId, tokenId, p.x, p.y);
     publishContacts();
+    console.log(`[Tisch] Kontakt ${pointerId} -> Token ${tokenId} verknüpft`);
   }
 }
 
@@ -82,7 +78,6 @@ function createPendingMarker(x, y) {
   return el;
 }
 
-// ---------- Re-Link bei Wiederaufsetzen (rein lokal, kein Host nötig) ----------
 function tryRelink(pointerId, x, y) {
   let bestTokenId = null, bestDist = Infinity;
   for (const [tokenId, f] of frozenLinks) {
@@ -100,14 +95,11 @@ function tryRelink(pointerId, x, y) {
   return false;
 }
 
-// ---------- Bewegung ----------
 async function moveLinkedToken(pointerId, x, y) {
   const link = links.get(pointerId);
   if (!link) return;
   positionEl(link.el, x, y);
-
   const scenePos = await OBR.viewport.inverseTransformPoint({ x, y });
-
   if (!link.interaction) {
     const token = sceneTokens.find((t) => t.id === link.tokenId);
     if (!token) return;
@@ -115,7 +107,6 @@ async function moveLinkedToken(pointerId, x, y) {
   }
   const [update] = link.interaction;
   update((draft) => { draft.position = scenePos; });
-
   clearTimeout(link.moveTimeout);
   link.moveTimeout = setTimeout(() => stopInteraction(pointerId), STOP_INTERACTION_AFTER_MS);
 }
@@ -144,7 +135,6 @@ function handleLinkedUp(pointerId) {
   links.delete(pointerId);
 }
 
-// ---------- Pointer-Events ----------
 overlay.addEventListener("pointerdown", (e) => {
   if (e.target !== overlay) return;
   const { pointerId, clientX: x, clientY: y } = e;
@@ -152,7 +142,6 @@ overlay.addEventListener("pointerdown", (e) => {
   const el = createPendingMarker(x, y);
   pending.set(pointerId, { x, y, el });
   publishContacts();
-  debug.textContent = `Neuer Kontakt ${pointerId} – warte auf Host-Zuweisung`;
 });
 
 overlay.addEventListener("pointermove", (e) => {
