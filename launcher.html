@@ -12,32 +12,6 @@
 <p>Mini-Tracker Overlay</p>
 <button id="openBtn">Vollbild-Overlay öffnen</button>
 <div id="status"></div>
-
-<script type="module">
-import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk/dist/index.min.js";
-
-const status = document.getElementById("status");
-const btn = document.getElementById("openBtn");
-
-OBR.onReady(() => {
-  status.textContent = "SDK bereit.";
-});
-
-async function openOverlay() {
-  await OBR.popover.open({
-    id: "com.minitracker.overlay",
-    url: "overlay.html",
-    width: window.screen.width,
-    height: window.screen.height,
-    anchorReference: "POSITION",
-    anchorPosition: { left: 0, top: 0 },
-    hidePaper: true,
-    disableClickAway: true,
-  });
-  status.textContent = "Overlay geöffnet.";
-}
-
-btn.addEventListener("click", openOverlay);
-</script>
+<script type="module" src="launcher.js"></script>
 </body>
 </html>
