@@ -1,19 +1,12 @@
 {
-  "manifest_version": 1,
   "name": "Mini-Tracker",
-  "version": "0.1.0",
-  "author": "Du",
-  "description": "Trackt physische Miniaturen via Touch-Frame und verknuepft sie mit Scene-Tokens",
+  "version": "1.0.0",
+  "manifest_version": 1,
   "action": {
     "title": "Mini-Tracker",
     "icon": "/icon.svg",
-    "popover": {
-      "url": "/overlay.html",
-      "height": 200,
-      "width": 200
-    }
-  },
-  "background": {
-    "url": "/background.html"
+    "popover": "/launcher.html",
+    "height": 200,
+    "width": 200
   }
 }
