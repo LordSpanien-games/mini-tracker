@@ -4,15 +4,13 @@ const overlay = document.getElementById("overlay");
 const pauseBtn = document.getElementById("pauseBtn");
 
 let sceneTokens = [];
-let pending = new Map();
-let links = new Map();
-let releasing = new Map();
-let frozenLinks = new Map();
+let pending = new Map();         // pointerId -> {contactId, x, y, el, labelEl, hoverTokenId, hoverStart, hoverInterval}
+let links = new Map();           // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout, lastScenePos, starting}
+let recentReleases = new Map();  // tokenId -> {x, y, releasedAt, visualEl, visualLabelEl, showTimeout, expireTimeout}
 
-const RELEASE_GRACE_MS = 400;
-const RELEASE_GRACE_RADIUS_PX = 80;
-const RELINK_WINDOW_MS = 5000;
-const RELINK_RADIUS_PX = 250;
+const QUICK_RESUME_MS = 700;       // bis hierhin: komplett unsichtbare Toleranz (Hardware-Flackern)
+const RELINK_WINDOW_MS = 6000;     // Gesamtfenster für Wiedererkennung (auch nach bewusstem Hochnehmen)
+const RELINK_RADIUS_PX = 300;      // Toleranzradius für Wiedererkennung
 const STOP_INTERACTION_AFTER_MS = 2500;
 const HOVER_LINK_MS = 3000;
 const HOVER_RADIUS_PX = 45;
@@ -113,7 +111,7 @@ async function autoAssignFromHover(pointerId, tokenId) {
   console.log(`[${ts()}] [Tisch] Auto-Zuordnung (Hover): ${pointerId} -> ${tokenId}`);
 }
 
-function doAssign(pointerId, tokenId, x, y) {
+function doAssign(pointerId, tokenId, x, y, silent) {
   if (links.has(pointerId)) {
     console.warn(`[${ts()}] [Tisch] doAssign ignoriert - pointerId ${pointerId} bereits verknüpft.`);
     return;
@@ -141,41 +139,32 @@ function doAssign(pointerId, tokenId, x, y) {
     starting: false,
   });
 
-  showLockFlash(x, y);
+  if (!silent) showLockFlash(x, y);
   commitPositionImmediate(tokenId, x, y);
-  console.log(`[${ts()}] [Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}`);
+  console.log(`[${ts()}] [Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}${silent ? " (nahtlos, Flacker-Toleranz)" : ""}`);
 }
 
-function tryResumeReleasing(pointerId, x, y) {
+// ---------- EINHEITLICHE Wiedererkennung: deckt sowohl Hardware-Flackern als auch bewusstes Hochnehmen+Neuplatzieren ab ----------
+function tryResumeToken(pointerId, x, y) {
   let bestTokenId = null, bestDist = Infinity;
-  for (const [tokenId, r] of releasing) {
-    const dist = Math.hypot(r.x - x, r.y - y);
-    if (dist <= RELEASE_GRACE_RADIUS_PX && dist < bestDist) { bestDist = dist; bestTokenId = tokenId; }
+  for (const [tokenId, e] of recentReleases) {
+    const dist = Math.hypot(e.x - x, e.y - y);
+    if (dist <= RELINK_RADIUS_PX && dist < bestDist) { bestDist = dist; bestTokenId = tokenId; }
   }
-  if (bestTokenId) {
-    const r = releasing.get(bestTokenId);
-    clearTimeout(r.timeoutHandle);
-    releasing.delete(bestTokenId);
+  if (!bestTokenId) return false;
 
-    const token = sceneTokens.find((t) => t.id === bestTokenId);
-    const el = document.createElement("div");
-    el.className = "marker linked";
-    overlay.appendChild(el);
-    const labelEl = document.createElement("div");
-    labelEl.className = "idLabel hidden";
-    overlay.appendChild(labelEl);
-    positionMarkerAndLabel(el, labelEl, x, y);
+  const e = recentReleases.get(bestTokenId);
+  const elapsed = Date.now() - e.releasedAt;
+  clearTimeout(e.showTimeout);
+  clearTimeout(e.expireTimeout);
+  if (e.visualEl) e.visualEl.remove();
+  if (e.visualLabelEl) e.visualLabelEl.remove();
+  recentReleases.delete(bestTokenId);
 
-    links.set(pointerId, {
-      tokenId: bestTokenId, el, labelEl,
-      interaction: null, moveTimeout: null,
-      lastScenePos: token?.position || null,
-      starting: false,
-    });
-    console.log(`[${ts()}] [Tisch] Flacker-Toleranz: nahtlose Fortsetzung für Token ${bestTokenId} (Distanz ${Math.round(bestDist)}px)`);
-    return true;
-  }
-  return false;
+  const silent = elapsed < QUICK_RESUME_MS;
+  doAssign(pointerId, bestTokenId, x, y, silent);
+  console.log(`[${ts()}] [Tisch] Wiedererkennung: ${pointerId} -> ${bestTokenId} (nach ${elapsed}ms, Distanz ${Math.round(bestDist)}px)`);
+  return true;
 }
 
 function showLockFlash(x, y) {
@@ -267,25 +256,6 @@ function clearPendingHover(p) {
   if (p.hoverInterval) clearInterval(p.hoverInterval);
 }
 
-function tryRelink(pointerId, x, y) {
-  let bestTokenId = null, bestDist = Infinity;
-  for (const [tokenId, f] of frozenLinks) {
-    const dist = Math.hypot(f.x - x, f.y - y);
-    if (dist <= RELINK_RADIUS_PX && dist < bestDist) { bestDist = dist; bestTokenId = tokenId; }
-  }
-  if (bestTokenId) {
-    const f = frozenLinks.get(bestTokenId);
-    clearTimeout(f.timeoutHandle);
-    f.el.remove();
-    f.labelEl.remove();
-    frozenLinks.delete(bestTokenId);
-    doAssign(pointerId, bestTokenId, x, y);
-    console.log(`[${ts()}] [Tisch] Re-Link (nach echtem Hochnehmen) erfolgreich: ${pointerId} -> ${bestTokenId}`);
-    return true;
-  }
-  return false;
-}
-
 async function moveLinkedToken(pointerId, x, y) {
   const link = links.get(pointerId);
   if (!link) return;
@@ -338,6 +308,7 @@ async function stopInteraction(pointerId) {
   }
 }
 
+// ---------- Pointer wird abgehoben: einziger, einheitlicher Übergabe-Zustand ----------
 async function handleLinkedUp(pointerId) {
   const link = links.get(pointerId);
   if (!link) return;
@@ -349,31 +320,38 @@ async function handleLinkedUp(pointerId) {
   const tokenId = link.tokenId;
 
   links.delete(pointerId);
-
-  console.log(`[${ts()}] [Tisch] pointerUp für ${pointerId}, Token ${tokenId} -> Flacker-Toleranzfenster (${RELEASE_GRACE_MS}ms) gestartet.`);
-
-  const timeoutHandle = setTimeout(() => {
-    releasing.delete(tokenId);
-    link.el.classList.remove("linked");
-    link.el.classList.add("frozen");
-    link.labelEl.classList.remove("hidden");
-    link.labelEl.textContent = "wartet...";
-
-    const frozenTimeout = setTimeout(() => {
-      link.el.remove();
-      link.labelEl.remove();
-      frozenLinks.delete(tokenId);
-      console.log(`[${ts()}] [Tisch] Re-Link-Fenster abgelaufen für Token ${tokenId}.`);
-    }, RELINK_WINDOW_MS);
-
-    frozenLinks.set(tokenId, { x, y, el: link.el, labelEl: link.labelEl, timeoutHandle: frozenTimeout });
-    console.log(`[${ts()}] [Tisch] Kein Flacker - echtes Hochnehmen angenommen. Token ${tokenId} jetzt sichtbar eingefroren.`);
-  }, RELEASE_GRACE_MS);
-
-  releasing.set(tokenId, { x, y, timeoutHandle });
-
   link.el.remove();
   link.labelEl.remove();
+
+  console.log(`[${ts()}] [Tisch] pointerUp für ${pointerId}, Token ${tokenId} -> wartet auf Wiedererkennung (bis zu ${RELINK_WINDOW_MS}ms, Radius ${RELINK_RADIUS_PX}px).`);
+
+  const entry = { x, y, releasedAt: Date.now(), visualEl: null, visualLabelEl: null, showTimeout: null, expireTimeout: null };
+
+  entry.showTimeout = setTimeout(() => {
+    if (!recentReleases.has(tokenId)) return; // wurde inzwischen schon wiedererkannt
+    const el = document.createElement("div");
+    el.className = "marker frozen";
+    overlay.appendChild(el);
+    const labelEl = document.createElement("div");
+    labelEl.className = "idLabel";
+    labelEl.textContent = "wartet...";
+    overlay.appendChild(labelEl);
+    positionMarkerAndLabel(el, labelEl, entry.x, entry.y);
+    entry.visualEl = el;
+    entry.visualLabelEl = labelEl;
+  }, QUICK_RESUME_MS);
+
+  entry.expireTimeout = setTimeout(() => {
+    const e = recentReleases.get(tokenId);
+    if (e) {
+      if (e.visualEl) e.visualEl.remove();
+      if (e.visualLabelEl) e.visualLabelEl.remove();
+    }
+    recentReleases.delete(tokenId);
+    console.log(`[${ts()}] [Tisch] Wiedererkennungs-Fenster abgelaufen für Token ${tokenId}.`);
+  }, RELINK_WINDOW_MS);
+
+  recentReleases.set(tokenId, entry);
 }
 
 overlay.addEventListener("pointerdown", (e) => {
@@ -383,9 +361,7 @@ overlay.addEventListener("pointerdown", (e) => {
   console.log(`[${ts()}] [Tisch] pointerdown: id=${pointerId}, type=${e.pointerType}, bereits verlinkt=${links.has(pointerId)}`);
 
   if (links.has(pointerId)) return;
-
-  if (tryResumeReleasing(pointerId, x, y)) return;
-  if (tryRelink(pointerId, x, y)) return;
+  if (tryResumeToken(pointerId, x, y)) return;
 
   const contactId = genId();
   const { el, labelEl } = createPendingMarker(contactId, x, y);
@@ -393,6 +369,7 @@ overlay.addEventListener("pointerdown", (e) => {
   pending.set(pointerId, entry);
   startHoverCheck(pointerId);
   publishContacts();
+  console.log(`[${ts()}] [Tisch] Neuer unzugeordneter Kontakt erstellt: ${pointerId} (${contactId.slice(0,8)})`);
 });
 
 overlay.addEventListener("pointermove", (e) => {
