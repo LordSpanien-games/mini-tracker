@@ -4,17 +4,18 @@ const overlay = document.getElementById("overlay");
 const pauseBtn = document.getElementById("pauseBtn");
 
 let sceneTokens = [];
-let pending = new Map();         // pointerId -> {contactId, x, y, el, labelEl, hoverTokenId, hoverStart, hoverInterval}
-let links = new Map();           // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout, lastScenePos, starting}
-let recentReleases = new Map();  // tokenId -> {x, y, releasedAt, visualEl, visualLabelEl, showTimeout, expireTimeout}
+let pending = new Map();
+let links = new Map();
+let recentReleases = new Map(); // tokenId -> {x, y, releasedAt, visualEl, visualLabelEl, showTimeout, expireTimeout}
 
-const QUICK_RESUME_MS = 700;       // bis hierhin: komplett unsichtbare Toleranz (Hardware-Flackern)
-const RELINK_WINDOW_MS = 6000;     // Gesamtfenster für Wiedererkennung (auch nach bewusstem Hochnehmen)
-const RELINK_RADIUS_PX = 300;      // Toleranzradius für Wiedererkennung
+const QUICK_RESUME_MS = 700;
+const RELINK_WINDOW_MS = 6000;
+const RELINK_RADIUS_PX = 300;
 const STOP_INTERACTION_AFTER_MS = 2500;
 const HOVER_LINK_MS = 3000;
 const HOVER_RADIUS_PX = 45;
 const HOVER_CHECK_INTERVAL_MS = 200;
+const MOVE_THROTTLE_MS = 40; // Drosselung der Netzwerk-Updates bei Bewegung
 
 const META_KEY_CONTACTS = "com.minitracker/contacts";
 const META_KEY_LINKS = "com.minitracker/links";
@@ -24,7 +25,6 @@ function genId() {
   if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
   return "id-" + Math.random().toString(36).slice(2) + "-" + Date.now();
 }
-
 function ts() {
   return new Date().toISOString().split("T")[1].slice(0, 12);
 }
@@ -137,20 +137,33 @@ function doAssign(pointerId, tokenId, x, y, silent) {
     moveTimeout: null,
     lastScenePos: token?.position || null,
     starting: false,
+    lastMoveSent: 0,
   });
 
   if (!silent) showLockFlash(x, y);
   commitPositionImmediate(tokenId, x, y);
-  console.log(`[${ts()}] [Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}${silent ? " (nahtlos, Flacker-Toleranz)" : ""}`);
+  console.log(`[${ts()}] [Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}${silent ? " (nahtlos)" : ""}`);
 }
 
-// ---------- EINHEITLICHE Wiedererkennung: deckt sowohl Hardware-Flackern als auch bewusstes Hochnehmen+Neuplatzieren ab ----------
+// ---------- EINHEITLICHE Wiedererkennung ----------
+// Priorität 1: Treffer im Toleranzradius (bei mehreren wartenden Minis zur Unterscheidung nötig)
+// Priorität 2: Falls KEIN Radius-Treffer, aber nur EINE Mini wartet, ist die Zuordnung trotzdem
+//              eindeutig, unabhängig von der Entfernung (z.B. Mini wurde weit weg abgesetzt).
 function tryResumeToken(pointerId, x, y) {
+  if (recentReleases.size === 0) return false;
+
   let bestTokenId = null, bestDist = Infinity;
   for (const [tokenId, e] of recentReleases) {
     const dist = Math.hypot(e.x - x, e.y - y);
     if (dist <= RELINK_RADIUS_PX && dist < bestDist) { bestDist = dist; bestTokenId = tokenId; }
   }
+
+  let farMatch = false;
+  if (!bestTokenId && recentReleases.size === 1) {
+    bestTokenId = [...recentReleases.keys()][0];
+    farMatch = true;
+  }
+
   if (!bestTokenId) return false;
 
   const e = recentReleases.get(bestTokenId);
@@ -163,7 +176,7 @@ function tryResumeToken(pointerId, x, y) {
 
   const silent = elapsed < QUICK_RESUME_MS;
   doAssign(pointerId, bestTokenId, x, y, silent);
-  console.log(`[${ts()}] [Tisch] Wiedererkennung: ${pointerId} -> ${bestTokenId} (nach ${elapsed}ms, Distanz ${Math.round(bestDist)}px)`);
+  console.log(`[${ts()}] [Tisch] Wiedererkennung: ${pointerId} -> ${bestTokenId} (nach ${elapsed}ms${farMatch ? ", FERN-ZUORDNUNG (einzige wartende Mini)" : ", Distanz " + Math.round(bestDist) + "px"})`);
   return true;
 }
 
@@ -256,10 +269,10 @@ function clearPendingHover(p) {
   if (p.hoverInterval) clearInterval(p.hoverInterval);
 }
 
+// ---------- Bewegung: nutzt lokal zwischengespeicherte Token-Daten statt Server-Roundtrip ----------
 async function moveLinkedToken(pointerId, x, y) {
   const link = links.get(pointerId);
   if (!link) return;
-  positionMarkerAndLabel(link.el, link.labelEl, x, y);
 
   const scenePos = await OBR.viewport.inverseTransformPoint({ x, y });
   link.lastScenePos = scenePos;
@@ -267,18 +280,21 @@ async function moveLinkedToken(pointerId, x, y) {
   if (!link.interaction) {
     if (link.starting) return;
     link.starting = true;
+    const cached = sceneTokens.find((t) => t.id === link.tokenId);
+    if (!cached) { link.starting = false; return; }
+    if (!links.has(pointerId)) { link.starting = false; return; }
+    // Lokale Kopie mit aktueller Position als Ausgangszustand - vermeidet
+    // zusätzlichen async Server-Roundtrip, der bei mehreren aktiven Minis
+    // zu spürbaren Verzögerungen führen kann.
+    const baseState = { ...cached, position: link.lastScenePos };
     try {
-      const freshItems = await OBR.scene.items.getItems([link.tokenId]);
-      const token = freshItems[0];
-      if (!token) { link.starting = false; return; }
-      if (!links.has(pointerId)) { link.starting = false; return; }
-      link.interaction = await OBR.interaction.startItemInteraction(token);
-      link.starting = false;
+      link.interaction = await OBR.interaction.startItemInteraction(baseState);
     } catch (err) {
       console.error("[Tisch] Fehler beim Starten der Interaction:", err);
       link.starting = false;
       return;
     }
+    link.starting = false;
   }
 
   if (!link.interaction) return;
@@ -308,7 +324,6 @@ async function stopInteraction(pointerId) {
   }
 }
 
-// ---------- Pointer wird abgehoben: einziger, einheitlicher Übergabe-Zustand ----------
 async function handleLinkedUp(pointerId) {
   const link = links.get(pointerId);
   if (!link) return;
@@ -323,12 +338,12 @@ async function handleLinkedUp(pointerId) {
   link.el.remove();
   link.labelEl.remove();
 
-  console.log(`[${ts()}] [Tisch] pointerUp für ${pointerId}, Token ${tokenId} -> wartet auf Wiedererkennung (bis zu ${RELINK_WINDOW_MS}ms, Radius ${RELINK_RADIUS_PX}px).`);
+  console.log(`[${ts()}] [Tisch] pointerUp für ${pointerId}, Token ${tokenId} -> wartet auf Wiedererkennung.`);
 
   const entry = { x, y, releasedAt: Date.now(), visualEl: null, visualLabelEl: null, showTimeout: null, expireTimeout: null };
 
   entry.showTimeout = setTimeout(() => {
-    if (!recentReleases.has(tokenId)) return; // wurde inzwischen schon wiedererkannt
+    if (!recentReleases.has(tokenId)) return;
     const el = document.createElement("div");
     el.className = "marker frozen";
     overlay.appendChild(el);
@@ -358,7 +373,7 @@ overlay.addEventListener("pointerdown", (e) => {
   if (e.target !== overlay) return;
   const { pointerId, clientX: x, clientY: y } = e;
 
-  console.log(`[${ts()}] [Tisch] pointerdown: id=${pointerId}, type=${e.pointerType}, bereits verlinkt=${links.has(pointerId)}`);
+  console.log(`[${ts()}] [Tisch] pointerdown: id=${pointerId}, type=${e.pointerType}`);
 
   if (links.has(pointerId)) return;
   if (tryResumeToken(pointerId, x, y)) return;
@@ -369,14 +384,22 @@ overlay.addEventListener("pointerdown", (e) => {
   pending.set(pointerId, entry);
   startHoverCheck(pointerId);
   publishContacts();
-  console.log(`[${ts()}] [Tisch] Neuer unzugeordneter Kontakt erstellt: ${pointerId} (${contactId.slice(0,8)})`);
 });
 
 overlay.addEventListener("pointermove", (e) => {
   const { pointerId, clientX: x, clientY: y } = e;
   const p = pending.get(pointerId);
   if (p) { p.x = x; p.y = y; positionMarkerAndLabel(p.el, p.labelEl, x, y); return; }
-  if (links.has(pointerId)) moveLinkedToken(pointerId, x, y);
+
+  const link = links.get(pointerId);
+  if (!link) return;
+  positionMarkerAndLabel(link.el, link.labelEl, x, y); // visuell sofort, lokal, kein Overhead
+
+  const now = Date.now();
+  if (now - link.lastMoveSent >= MOVE_THROTTLE_MS) {
+    link.lastMoveSent = now;
+    moveLinkedToken(pointerId, x, y);
+  }
 });
 
 overlay.addEventListener("pointerup", (e) => {
