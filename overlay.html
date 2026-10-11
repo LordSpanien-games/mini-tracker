@@ -5,12 +5,15 @@ const pauseBtn = document.getElementById("pauseBtn");
 
 let sceneTokens = [];
 let pending = new Map();
-let links = new Map();
-let frozenLinks = new Map();
+let links = new Map();        // pointerId -> {tokenId, el, labelEl, interaction, moveTimeout, lastScenePos, starting}
+let releasing = new Map();    // tokenId -> {x, y, timeoutHandle}  (kurze, unsichtbare Flacker-Toleranz)
+let frozenLinks = new Map();  // tokenId -> {x, y, el, labelEl, timeoutHandle} (echtes Hochnehmen)
 
-const RELINK_WINDOW_MS = 5000;
+const RELEASE_GRACE_MS = 400;   // Toleranzfenster für Hardware-Flackern (unsichtbar)
+const RELEASE_GRACE_RADIUS_PX = 80;
+const RELINK_WINDOW_MS = 5000;  // Fenster für echtes Hochnehmen+Neuplatzieren
 const RELINK_RADIUS_PX = 250;
-const STOP_INTERACTION_AFTER_MS = 2500; // von 1200 auf 2500 erhöht - mehr Toleranz für Pausen während Bewegung
+const STOP_INTERACTION_AFTER_MS = 2500;
 const HOVER_LINK_MS = 3000;
 const HOVER_RADIUS_PX = 45;
 const HOVER_CHECK_INTERVAL_MS = 200;
@@ -24,14 +27,18 @@ function genId() {
   return "id-" + Math.random().toString(36).slice(2) + "-" + Date.now();
 }
 
+function ts() {
+  return new Date().toISOString().split("T")[1].slice(0, 12);
+}
+
 pauseBtn.addEventListener("pointerdown", async (e) => {
   e.stopPropagation();
-  console.log("[Tisch] Pause gedrückt - schließe Overlay.");
+  console.log(`[${ts()}] [Tisch] Pause gedrückt - schließe Overlay.`);
   await OBR.popover.close(POPOVER_ID);
 });
 
 OBR.onReady(async () => {
-  console.log("[Tisch] SDK bereit.");
+  console.log(`[${ts()}] [Tisch] SDK bereit.`);
   const ready = await OBR.scene.isReady();
   if (ready) await loadTokens();
   OBR.scene.onReadyChange(async (isReady) => { if (isReady) await loadTokens(); });
@@ -89,7 +96,7 @@ function applyLinksFromMetadata(linksFromHost) {
     pending.delete(foundPointerId);
     doAssign(foundPointerId, tokenId, p.x, p.y);
     cleanupMetadataAfterAssign(contactId);
-    console.log(`[Tisch] Host-Zuordnung: ${contactId.slice(0,8)} -> ${tokenId}`);
+    console.log(`[${ts()}] [Tisch] Host-Zuordnung: ${contactId.slice(0,8)} -> ${tokenId}`);
   }
 }
 
@@ -103,16 +110,16 @@ async function autoAssignFromHover(pointerId, tokenId) {
   pending.delete(pointerId);
   doAssign(pointerId, tokenId, p.x, p.y);
   await cleanupMetadataAfterAssign(p.contactId);
-  console.log(`[Tisch] Auto-Zuordnung (Hover): ${pointerId} -> ${tokenId}`);
+  console.log(`[${ts()}] [Tisch] Auto-Zuordnung (Hover): ${pointerId} -> ${tokenId}`);
 }
 
 function doAssign(pointerId, tokenId, x, y) {
   if (links.has(pointerId)) {
-    console.warn(`[Tisch] doAssign ignoriert - pointerId ${pointerId} bereits verknüpft.`);
+    console.warn(`[${ts()}] [Tisch] doAssign ignoriert - pointerId ${pointerId} bereits verknüpft.`);
     return;
   }
   if (getLinkedTokenIds().has(tokenId)) {
-    console.warn(`[Tisch] doAssign ignoriert - Token ${tokenId} ist bereits anderweitig verknüpft.`);
+    console.warn(`[${ts()}] [Tisch] doAssign ignoriert - Token ${tokenId} ist bereits anderweitig verknüpft.`);
     return;
   }
 
@@ -131,12 +138,47 @@ function doAssign(pointerId, tokenId, x, y) {
     interaction: null,
     moveTimeout: null,
     lastScenePos: token?.position || null,
-    starting: false, // Schutz gegen doppelten Interaction-Start (Race Condition)
+    starting: false,
   });
 
   showLockFlash(x, y);
   commitPositionImmediate(tokenId, x, y);
-  console.log(`[Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}`);
+  console.log(`[${ts()}] [Tisch] LOCKED: pointerId=${pointerId} -> token=${tokenId}`);
+}
+
+// ---------- Nahtlose Übernahme bei existierendem "releasing"-Eintrag (Flacker-Toleranz) ----------
+function tryResumeReleasing(pointerId, x, y) {
+  let bestTokenId = null, bestDist = Infinity;
+  for (const [tokenId, r] of releasing) {
+    const dist = Math.hypot(r.x - x, r.y - y);
+    if (dist <= RELEASE_GRACE_RADIUS_PX && dist < bestDist) { bestDist = dist; bestTokenId = tokenId; }
+  }
+  if (bestTokenId) {
+    const r = releasing.get(bestTokenId);
+    clearTimeout(r.timeoutHandle);
+    releasing.delete(bestTokenId);
+
+    // Nahtlos fortsetzen: KEIN Lock-Flash, KEIN neuer Marker-Aufbau - einfach den Link
+    // unter der neuen pointerId weiterführen, exakt wie ungestörtes Halten.
+    const token = sceneTokens.find((t) => t.id === bestTokenId);
+    const el = document.createElement("div");
+    el.className = "marker linked";
+    overlay.appendChild(el);
+    const labelEl = document.createElement("div");
+    labelEl.className = "idLabel hidden";
+    overlay.appendChild(labelEl);
+    positionMarkerAndLabel(el, labelEl, x, y);
+
+    links.set(pointerId, {
+      tokenId: bestTokenId, el, labelEl,
+      interaction: null, moveTimeout: null,
+      lastScenePos: token?.position || null,
+      starting: false,
+    });
+    console.log(`[${ts()}] [Tisch] Flacker-Toleranz: nahtlose Fortsetzung für Token ${bestTokenId} (Distanz ${Math.round(bestDist)}px)`);
+    return true;
+  }
+  return false;
 }
 
 function showLockFlash(x, y) {
@@ -241,7 +283,7 @@ function tryRelink(pointerId, x, y) {
     f.labelEl.remove();
     frozenLinks.delete(bestTokenId);
     doAssign(pointerId, bestTokenId, x, y);
-    console.log(`[Tisch] Re-Link erfolgreich: ${pointerId} -> ${bestTokenId}`);
+    console.log(`[${ts()}] [Tisch] Re-Link (nach echtem Hochnehmen) erfolgreich: ${pointerId} -> ${bestTokenId}`);
     return true;
   }
   return false;
@@ -256,25 +298,15 @@ async function moveLinkedToken(pointerId, x, y) {
   link.lastScenePos = scenePos;
 
   if (!link.interaction) {
-    if (link.starting) {
-      // Es läuft bereits ein Start-Vorgang (async) - nicht doppelt starten.
-      return;
-    }
+    if (link.starting) return;
     link.starting = true;
-    console.log(`[Tisch] Starte Interaction für ${link.tokenId}...`);
     try {
       const freshItems = await OBR.scene.items.getItems([link.tokenId]);
       const token = freshItems[0];
-      if (!token) {
-        console.warn(`[Tisch] Token ${link.tokenId} nicht mehr gefunden beim Interaction-Start.`);
-        link.starting = false;
-        return;
-      }
-      // Erneut prüfen, ob link noch gültig ist (könnte währenddessen aufgehoben worden sein)
+      if (!token) { link.starting = false; return; }
       if (!links.has(pointerId)) { link.starting = false; return; }
       link.interaction = await OBR.interaction.startItemInteraction(token);
       link.starting = false;
-      console.log(`[Tisch] Interaction gestartet für ${link.tokenId}.`);
     } catch (err) {
       console.error(`[Tisch] Fehler beim Starten der Interaction:`, err);
       link.starting = false;
@@ -282,7 +314,7 @@ async function moveLinkedToken(pointerId, x, y) {
     }
   }
 
-  if (!link.interaction) return; // falls Start inzwischen fehlgeschlagen ist
+  if (!link.interaction) return;
 
   const [update] = link.interaction;
   update((draft) => { draft.position = scenePos; });
@@ -297,7 +329,6 @@ async function stopInteraction(pointerId) {
   const [, stop] = link.interaction;
   stop();
   link.interaction = null;
-  console.log(`[Tisch] Interaction gestoppt für ${link.tokenId}.`);
 
   if (link.lastScenePos) {
     try {
@@ -310,37 +341,59 @@ async function stopInteraction(pointerId) {
   }
 }
 
+// ---------- Pointer wird abgehoben: ERST kurze Flacker-Toleranz, DANN ggf. echtes Einfrieren ----------
 async function handleLinkedUp(pointerId) {
   const link = links.get(pointerId);
   if (!link) return;
-  console.log(`[Tisch] pointerUp für verknüpften Kontakt ${pointerId}, Token ${link.tokenId} -> wird eingefroren.`);
   await stopInteraction(pointerId);
+
   const rect = link.el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
-  link.el.classList.remove("linked");
-  link.el.classList.add("frozen");
-  link.labelEl.classList.remove("hidden");
-  link.labelEl.textContent = "wartet...";
+  const tokenId = link.tokenId;
+
+  // Marker bleibt unsichtbar während der kurzen Grace-Phase (keine optische Störung)
+  links.delete(pointerId);
+
+  console.log(`[${ts()}] [Tisch] pointerUp für ${pointerId}, Token ${tokenId} -> Flacker-Toleranzfenster (${RELEASE_GRACE_MS}ms) gestartet.`);
 
   const timeoutHandle = setTimeout(() => {
-    link.el.remove();
-    link.labelEl.remove();
-    frozenLinks.delete(link.tokenId);
-    console.log(`[Tisch] Re-Link-Fenster abgelaufen für Token ${link.tokenId}.`);
-  }, RELINK_WINDOW_MS);
+    releasing.delete(tokenId);
+    // Grace-Zeit abgelaufen ohne Fortsetzung -> jetzt ECHT einfrieren (sichtbar, langes Fenster)
+    link.el.classList.remove("linked");
+    link.el.classList.add("frozen");
+    link.labelEl.classList.remove("hidden");
+    link.labelEl.textContent = "wartet...";
 
-  frozenLinks.set(link.tokenId, { x, y, el: link.el, labelEl: link.labelEl, timeoutHandle });
-  links.delete(pointerId);
+    const frozenTimeout = setTimeout(() => {
+      link.el.remove();
+      link.labelEl.remove();
+      frozenLinks.delete(tokenId);
+      console.log(`[${ts()}] [Tisch] Re-Link-Fenster abgelaufen für Token ${tokenId}.`);
+    }, RELINK_WINDOW_MS);
+
+    frozenLinks.set(tokenId, { x, y, el: link.el, labelEl: link.labelEl, timeoutHandle: frozenTimeout });
+    console.log(`[${ts()}] [Tisch] Kein Flacker - echtes Hochnehmen angenommen. Token ${tokenId} jetzt sichtbar eingefroren.`);
+  }, RELEASE_GRACE_MS);
+
+  releasing.set(tokenId, { x, y, timeoutHandle });
+
+  // Marker/Label aus dem vorherigen Zustand entfernen (werden bei Bedarf neu erzeugt)
+  link.el.remove();
+  link.labelEl.remove();
 }
 
 overlay.addEventListener("pointerdown", (e) => {
   if (e.target !== overlay) return;
   const { pointerId, clientX: x, clientY: y } = e;
 
-  console.log(`[Tisch] pointerdown: id=${pointerId}, type=${e.pointerType}, bereits verlinkt=${links.has(pointerId)}`);
+  console.log(`[${ts()}] [Tisch] pointerdown: id=${pointerId}, type=${e.pointerType}, bereits verlinkt=${links.has(pointerId)}`);
 
   if (links.has(pointerId)) return;
+
+  // Priorität 1: Flacker-Toleranz (unsichtbar, sehr kurz)
+  if (tryResumeReleasing(pointerId, x, y)) return;
+  // Priorität 2: echtes Re-Link nach bewusstem Hochnehmen (sichtbar, länger)
   if (tryRelink(pointerId, x, y)) return;
 
   const contactId = genId();
@@ -360,7 +413,7 @@ overlay.addEventListener("pointermove", (e) => {
 
 overlay.addEventListener("pointerup", (e) => {
   const { pointerId } = e;
-  console.log(`[Tisch] pointerup: id=${pointerId}`);
+  console.log(`[${ts()}] [Tisch] pointerup: id=${pointerId}`);
   const p = pending.get(pointerId);
   if (p) {
     clearPendingHover(p);
@@ -374,7 +427,7 @@ overlay.addEventListener("pointerup", (e) => {
 });
 
 overlay.addEventListener("pointercancel", (e) => {
-  console.log(`[Tisch] pointercancel: id=${e.pointerId}`);
+  console.log(`[${ts()}] [Tisch] pointercancel: id=${e.pointerId}`);
   overlay.dispatchEvent(new PointerEvent("pointerup", e));
 });
 overlay.addEventListener("contextmenu", (e) => e.preventDefault());
